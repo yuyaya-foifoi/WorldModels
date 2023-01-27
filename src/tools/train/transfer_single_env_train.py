@@ -1,59 +1,155 @@
-from src.utils import make_env
-from configs import CONFIG_DICT
-from src.buffer import ReplayBuffer
-import time
-from src.model import ActionModel, Encoder, RSSM, ValueModel
-from src.agent import Agent
-from src.utils import preprocess_obs
-import numpy as np
-import torch
-from torch.distributions.kl import kl_divergence
-from torch.nn.utils import clip_grad_norm_
-from torch.nn import functional as F
 import os
+import sys
+
+sys.path.append("./")
+
+import gc
+import time
+
+import numpy as np
+import pandas as pd
+import pybullet_envs
+import torch
+import torch.nn as nn
+from torch.distributions.kl import kl_divergence
+from torch.nn import functional as F
+from torch.nn.utils import clip_grad_norm_
+
+from configs import MULTIPLE_ENV_CONFIG_DICT as CONFIG_DICT
+from src.agent import Agent
+from src.buffer import ReplayBuffer
 from src.loss import lambda_target
+from src.model import RSSM, ActionModel, Encoder, ValueModel
+from src.utils import make_env, preprocess_obs
+from src.utils.date import get_str_currentdate
 from src.utils.save import shutil_copy
 
+seed_episodes = CONFIG_DICT["experiment"]["train"]["seed_episodes"]
 
-seed_episodes = CONFIG_DICT["train"]["seed_episodes"]
+all_episodes = CONFIG_DICT["experiment"]["train"]["all_episodes"]
+action_noise_var = CONFIG_DICT["experiment"]["train"]["action_noise_var"]
+collect_interval = CONFIG_DICT["experiment"]["train"]["collect_interval"]
+batch_size = CONFIG_DICT["experiment"]["train"]["batch_size"]
+chunk_length = CONFIG_DICT["experiment"]["train"]["chunk_length"]
+batch_size = CONFIG_DICT["experiment"]["train"]["batch_size"]
 
-all_episodes = CONFIG_DICT["train"]["all_episodes"]
-action_noise_var = CONFIG_DICT["train"]["action_noise_var"]
-collect_interval = CONFIG_DICT["train"]["collect_interval"]
-batch_size = CONFIG_DICT["train"]["batch_size"]
-chunk_length = CONFIG_DICT["train"]["chunk_length"]
-batch_size = CONFIG_DICT["train"]["batch_size"]
+test_interval = CONFIG_DICT["experiment"]["train"]["test_interval"]
+model_save_interval = CONFIG_DICT["experiment"]["train"]["model_save_interval"]
+collect_interval = CONFIG_DICT["experiment"]["train"]["collect_interval"]
+action_noise_var = CONFIG_DICT["experiment"]["train"]["action_noise_var"]
 
-test_interval = CONFIG_DICT["train"]["test_interval"]
-model_save_interval = CONFIG_DICT["train"]["model_save_interval"]
-collect_interval = CONFIG_DICT["train"]["collect_interval"]
-action_noise_var = CONFIG_DICT["train"]["action_noise_var"]
-
-batch_size = CONFIG_DICT["train"]["batch_size"]
-chunk_length = CONFIG_DICT["train"]["chunk_length"]
-imagination_horizon = CONFIG_DICT["train"]["imagination_horizon"]
-gamma = CONFIG_DICT["train"]["gamma"]
-lambda_ = CONFIG_DICT["train"]["lambda_"]
-clip_grad_norm = CONFIG_DICT["train"]["clip_grad_norm"]
-free_nats = CONFIG_DICT["train"]["free_nats"]
+batch_size = CONFIG_DICT["experiment"]["train"]["batch_size"]
+chunk_length = CONFIG_DICT["experiment"]["train"]["chunk_length"]
+imagination_horizon = CONFIG_DICT["experiment"]["train"]["imagination_horizon"]
+gamma = CONFIG_DICT["experiment"]["train"]["gamma"]
+lambda_ = CONFIG_DICT["experiment"]["train"]["lambda_"]
+clip_grad_norm = CONFIG_DICT["experiment"]["train"]["clip_grad_norm"]
+free_nats = CONFIG_DICT["experiment"]["train"]["free_nats"]
 
 state_dim = CONFIG_DICT["model"]["state_dim"]
 rnn_hidden_dim = CONFIG_DICT["model"]["rnn_hidden_dim"]
 
 device = CONFIG_DICT["device"]
 
+model_lr = CONFIG_DICT["experiment"]["train"]["model_lr"]
+eps = CONFIG_DICT["experiment"]["train"]["eps"]
+value_lr = CONFIG_DICT["experiment"]["train"]["value_lr"]
+action_lr = CONFIG_DICT["experiment"]["train"]["action_lr"]
 
-model_lr = CONFIG_DICT["train"]["model_lr"]
-eps = CONFIG_DICT["train"]["eps"]
-value_lr = CONFIG_DICT["train"]["value_lr"]
-action_lr = CONFIG_DICT["train"]["action_lr"]
+env_list = CONFIG_DICT["experiment"]["env_list"]
+env_name = CONFIG_DICT["experiment"]["env_name"]
+action_space_list = [
+    make_env(env_name).action_space.shape[0] for env_name in env_list
+]
+observation_space_list = [
+    make_env(env_name).observation_space.shape[0] for env_name in env_list
+]
+action_space = max(action_space_list)
+observation_space = max(observation_space_list)
+
+encoder = Encoder().to(device)
+rssm = RSSM(state_dim, action_space, rnn_hidden_dim, device)
+value_model = ValueModel(state_dim, rnn_hidden_dim).to(device)
+action_model = ActionModel(state_dim, rnn_hidden_dim, action_space).to(device)
 
 
-encoder = Encoder()
-action_model = ActionModel()
-rssm = RSSM()
-value_model = ValueModel()
-replay_buffer = ReplayBuffer()
+def get_fractional(saved_state, weight_key: str, ratio: float):
+    fractional = saved_state[weight_key] * ratio
+    return fractional
+
+
+transfer_type = CONFIG_DICT["experiment"]["transfer_type"]
+log_dir = CONFIG_DICT["experiment"]["transfer_path"]
+
+if transfer_type == "fractional":
+
+    encoder.load_state_dict(torch.load(os.path.join(log_dir, "encoder.pth")))
+
+    action_model.load_state_dict(
+        torch.load(os.path.join(log_dir, "action_model.pth"))
+    )
+    action_model.fc4.weight = nn.Parameter(
+        torch.Tensor(action_model.fc4.weight.size())
+    )
+    action_model.fc4.bias = nn.Parameter(
+        torch.Tensor(action_model.fc4.bias.size())
+    )
+
+    value_fc4_init_weight = value_model.fc4.weight
+    value_fc4_init_bias = value_model.fc4.bias
+    value_model.load_state_dict(
+        torch.load(os.path.join(log_dir, "value_model.pth"))
+    )
+    value_model.fc4.weight = nn.Parameter(
+        value_fc4_init_weight
+        + get_fractional(value_model.state_dict(), "fc4.weight", 0.2)
+    )
+    value_model.fc4.bias = nn.Parameter(
+        value_fc4_init_bias
+        + get_fractional(value_model.state_dict(), "fc4.bias", 0.2)
+    )
+
+    reward_fc4_init_weight = rssm.reward.fc4.weight
+    reward_fc4_init_bias = rssm.reward.fc4.bias
+    rssm.reward.load_state_dict(
+        torch.load(os.path.join(log_dir, "reward_model.pth"))
+    )
+    rssm.reward.fc4.weight = nn.Parameter(
+        reward_fc4_init_weight
+        + get_fractional(rssm.reward.state_dict(), "fc4.weight", 0.2)
+    )
+    rssm.reward.fc4.bias = nn.Parameter(
+        reward_fc4_init_bias
+        + get_fractional(rssm.reward.state_dict(), "fc4.bias", 0.2)
+    )
+
+    rssm.transition.load_state_dict(
+        torch.load(os.path.join(log_dir, "rssm.pth"))
+    )
+    rssm.observation.load_state_dict(
+        torch.load(os.path.join(log_dir, "obs_model.pth"))
+    )
+
+elif transfer_type == "full_transfer":
+    encoder.load_state_dict(torch.load(os.path.join(log_dir, "encoder.pth")))
+
+    action_model.load_state_dict(
+        torch.load(os.path.join(log_dir, "action_model.pth"))
+    )
+    value_model.load_state_dict(
+        torch.load(os.path.join(log_dir, "value_model.pth"))
+    )
+
+    rssm.reward.load_state_dict(
+        torch.load(os.path.join(log_dir, "reward_model.pth"))
+    )
+    rssm.transition.load_state_dict(
+        torch.load(os.path.join(log_dir, "rssm.pth"))
+    )
+    rssm.observation.load_state_dict(
+        torch.load(os.path.join(log_dir, "obs_model.pth"))
+    )
+
 
 model_params = (
     list(encoder.parameters())
@@ -69,19 +165,37 @@ action_optimizer = torch.optim.Adam(
     action_model.parameters(), lr=action_lr, eps=eps
 )
 
+replay_buffer = ReplayBuffer(
+    capacity=CONFIG_DICT["buffer"]["buffer_capacity"],
+    observation_shape=[64, 64, 3],
+    action_dim=action_space,
+)
+
 
 def main():
 
-    env = make_env(CONFIG_DICT["experiment"]["env_name"])
-
-    for episode in range(CONFIG_DICT["train"]["seed_episodes"]):
+    env = make_env(env_name)
+    for episode in range(CONFIG_DICT["experiment"]["train"]["seed_episodes"]):
         obs = env.reset()
         done = False
         while not done:
             action = env.action_space.sample()
             next_obs, reward, done, _ = env.step(action)
-            replay_buffer.push(obs, action, reward, done)
+
+            if action.shape[0] < action_space:
+                padded_action = np.pad(
+                    action, ((0, action_space - action.shape[0]))
+                )
+                replay_buffer.push(obs, padded_action, reward, done)
+
+            else:
+                replay_buffer.push(obs, action, reward, done)
             obs = next_obs
+    del env
+    gc.collect()
+
+    test_rewards = []
+    episodes = []
 
     for episode in range(seed_episodes, all_episodes):
         # -----------------------------
@@ -91,30 +205,39 @@ def main():
         # 行動を決定するためのエージェントを宣言
         policy = Agent(encoder, rssm.transition, action_model)
 
-        env = make_env()
+        env = make_env(env_name)
         obs = env.reset()
         done = False
         total_reward = 0
         while not done:
             action = policy(obs)
+            action = action[: env.action_space.shape[0]]
+
             # 探索のためにガウス分布に従うノイズを加える(explaration noise)
             action += np.random.normal(
                 0, np.sqrt(action_noise_var), env.action_space.shape[0]
             )
             next_obs, reward, done, _ = env.step(action)
 
+            if action.shape[0] < action_space:
+                action = np.pad(action, ((0, action_space - action.shape[0])))
+
             # リプレイバッファに観測, 行動, 報酬, doneを格納
             replay_buffer.push(obs, action, reward, done)
 
             obs = next_obs
             total_reward += reward
-
-        # 訓練時の報酬と経過時間をログとして表示
-        print(
-            "episode [%4d/%4d] is collected. Total reward is %f"
-            % (episode + 1, all_episodes, total_reward)
-        )
-        print("elasped time for interaction: %.2fs" % (time.time() - start))
+            # 訓練時の報酬と経過時間をログとして表示
+            print(
+                "env : {} episode [{}/{}] is collected. Total reward is {}".format(
+                    env_name, episode + 1, all_episodes, total_reward
+                )
+            )
+            print(
+                "elasped time for interaction: %.2fs" % (time.time() - start)
+            )
+        del env
+        gc.collect()
 
         # NNのパラメータを更新する
         start = time.time()
@@ -303,18 +426,19 @@ def main():
             )
 
         print("elasped time for update: %.2fs" % (time.time() - start))
-
         # --------------------------------------------------------------
         #    テストフェーズ. 探索ノイズなしでの性能を評価する
         # --------------------------------------------------------------
         if (episode + 1) % test_interval == 0:
             policy = Agent(encoder, rssm.transition, action_model)
             start = time.time()
+            env = make_env(env_name)
             obs = env.reset()
             done = False
             total_reward = 0
             while not done:
                 action = policy(obs, training=False)
+                action = action[: env.action_space.shape[0]]
                 obs, reward, done, _ = env.step(action)
                 total_reward += reward
 
@@ -323,6 +447,17 @@ def main():
                 % (episode + 1, all_episodes, total_reward)
             )
             print("elasped time for test: %.2fs" % (time.time() - start))
+            test_rewards.append(total_reward)
+            episodes.append(episode)
+
+            df = pd.DataFrame(
+                list(zip(episodes, test_rewards)),
+                columns=["episodes", "test_rewards"],
+            )
+            df.to_csv(os.path.join(log_dir, "test_reward.csv"))
+
+            del env
+            gc.collect()
 
         if (episode + 1) % model_save_interval == 0:
             # 定期的に学習済みモデルのパラメータを保存する
@@ -354,13 +489,16 @@ def main():
                 action_model.state_dict(),
                 os.path.join(model_log_dir, "action_model.pth"),
             )
-        del env
 
 
 if __name__ == "__main__":
-    log_dir = os.path.join(
-        CONFIG_DICT["logs"]["log_dir"], CONFIG_DICT["experiment"]["env_name"]
+    folder_name = (
+        "transfered_"
+        + CONFIG_DICT["experiment"]["env_name"]
+        + "_"
+        + get_str_currentdate()
     )
+    log_dir = os.path.join(CONFIG_DICT["logs"]["log_dir"], folder_name)
     os.makedirs(log_dir, exist_ok=True)
-    shutil_copy("./configs/configs.py", log_dir)
+    shutil_copy("./configs/transfer_single_env_config.py", log_dir)
     main()
