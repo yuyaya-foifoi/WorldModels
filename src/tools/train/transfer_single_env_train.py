@@ -15,7 +15,7 @@ from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 
-from configs import MULTIPLE_ENV_CONFIG_DICT as CONFIG_DICT
+from configs import TRANSFERED_SINGLE_ENV_CONFIG_DICT as CONFIG_DICT
 from src.agent import Agent
 from src.buffer import ReplayBuffer
 from src.loss import lambda_target
@@ -130,6 +130,10 @@ if transfer_type == "fractional":
         torch.load(os.path.join(log_dir, "obs_model.pth"))
     )
 
+    action_model = action_model.to(device)
+    value_model = value_model.to(device)
+    rssm.reward = rssm.reward.to(device)
+
 elif transfer_type == "full_transfer":
     encoder.load_state_dict(torch.load(os.path.join(log_dir, "encoder.pth")))
 
@@ -228,14 +232,12 @@ def main():
             obs = next_obs
             total_reward += reward
             # 訓練時の報酬と経過時間をログとして表示
-            print(
-                "env : {} episode [{}/{}] is collected. Total reward is {}".format(
-                    env_name, episode + 1, all_episodes, total_reward
-                )
+        print(
+            "env : {} episode [{}/{}] is collected. Total reward is {}".format(
+                env_name, episode + 1, all_episodes, total_reward
             )
-            print(
-                "elasped time for interaction: %.2fs" % (time.time() - start)
-            )
+        )
+        print("elasped time for interaction: %.2fs" % (time.time() - start))
         del env
         gc.collect()
 
@@ -494,6 +496,8 @@ def main():
 if __name__ == "__main__":
     folder_name = (
         "transfered_"
+        + CONFIG_DICT["experiment"]["transfer_type"]
+        + "_"
         + CONFIG_DICT["experiment"]["env_name"]
         + "_"
         + get_str_currentdate()
