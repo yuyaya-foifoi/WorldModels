@@ -56,14 +56,13 @@ eps = CONFIG_DICT["experiment"]["train"]["eps"]
 value_lr = CONFIG_DICT["experiment"]["train"]["value_lr"]
 action_lr = CONFIG_DICT["experiment"]["train"]["action_lr"]
 
-env = make_env(CONFIG_DICT["experiment"]["env_name"])
+_env = make_env(CONFIG_DICT["experiment"]["env_name"])
 encoder = Encoder().to(device)
-rssm = RSSM(state_dim, env.action_space.shape[0], rnn_hidden_dim, device)
+rssm = RSSM(state_dim, _env.action_space.shape[0], rnn_hidden_dim, device)
 value_model = ValueModel(state_dim, rnn_hidden_dim).to(device)
 action_model = ActionModel(
-    state_dim, rnn_hidden_dim, env.action_space.shape[0]
+    state_dim, rnn_hidden_dim, _env.action_space.shape[0]
 ).to(device)
-
 
 model_params = (
     list(encoder.parameters())
@@ -81,11 +80,9 @@ action_optimizer = torch.optim.Adam(
 
 replay_buffer = ReplayBuffer(
     capacity=CONFIG_DICT["buffer"]["buffer_capacity"],
-    observation_shape=env.observation_space.shape,
-    action_dim=env.action_space.shape[0],
+    observation_shape=_env.observation_space.shape,
+    action_dim=_env.action_space.shape[0],
 )
-del env
-gc.collect()
 
 
 def main():

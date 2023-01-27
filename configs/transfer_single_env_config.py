@@ -3,7 +3,6 @@ import torch
 TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
     "experiment": {
         "env_list": [
-            #"HopperBulletEnv-v0",
             "AntBulletEnv-v0",
             "HopperBulletEnv-v0",
         ],
@@ -27,7 +26,8 @@ TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
             "clip_grad_norm": 100,  # gradient clippingの値
             "free_nats": 3,  # KL誤差（RSSMのTransitionModelにおけるpriorとposteriorの間の誤差）がこの値以下の場合, 無視する
         },
-        "transfer_path": "./logs/train_[AntBulletEnv-v0_HopperBulletEnv-v0]_test_[HalfCheetahBulletEnv-v0]_20230127-155422/episode_0020"
+        "transfer_type" : 'fractional',
+        "transfer_path": "./logs/train_[AntBulletEnv-v0_HopperBulletEnv-v0]_test_[HalfCheetahBulletEnv-v0]_20230127-155422/episode_0040"
     },
     "model": {
         "state_dim": 30,  # 確率的状態の次元
