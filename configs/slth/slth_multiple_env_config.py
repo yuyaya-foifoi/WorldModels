@@ -1,12 +1,13 @@
 import torch
 
-TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
+SLTH_MULTIPLE_ENV_CONFIG_DICT = {
     "experiment": {
         "env_list": [
+            #"HopperBulletEnv-v0",
             "AntBulletEnv-v0",
             "HopperBulletEnv-v0",
         ],
-        "env_name": "HalfCheetahBulletEnv-v0",
+        "test_env_name": "HalfCheetahBulletEnv-v0",
         "train": {
             "model_lr": 6e-4,
             "value_lr": 8e-5,
@@ -26,12 +27,15 @@ TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
             "clip_grad_norm": 100,  # gradient clippingの値
             "free_nats": 3,  # KL誤差（RSSMのTransitionModelにおけるpriorとposteriorの間の誤差）がこの値以下の場合, 無視する
         },
-        "transfer_type" : 'fractional',
-        "transfer_path": "./logs/train_[AntBulletEnv-v0_HopperBulletEnv-v0]_test_[HalfCheetahBulletEnv-v0]_20230127-155422/episode_0040"
     },
     "model": {
         "state_dim": 30,  # 確率的状態の次元
         "rnn_hidden_dim": 200,  # 決定的状態（RNNの隠れ状態）の次元
+    },
+    "slth":{
+        "remain_rate":0.3,
+        "init":'scaled_signed_constant',
+        "is_subnet_conv":True
     },
     "buffer" : {
         'buffer_capacity' : 200000
