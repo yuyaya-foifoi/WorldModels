@@ -14,11 +14,21 @@ from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 
-from configs import MULTIPLE_ENV_CONFIG_DICT as CONFIG_DICT
+from configs import (
+    SINGLE_SHOT_TRANSFERED_SINGLE_ENV_CONFIG_DICT as CONFIG_DICT,
+)
 from src.agent import Agent
 from src.buffer import ReplayBuffer
 from src.loss import lambda_target
 from src.model import RSSM, ActionModel, Encoder, ValueModel
+from src.prune import (
+    apply_masks,
+    calculate_grad,
+    get_ftl_score,
+    get_masks,
+    get_score,
+)
+from src.slth.utils import modify_module_for_slth
 from src.utils import make_env, preprocess_obs
 from src.utils.date import get_str_currentdate
 from src.utils.save import shutil_copy
@@ -50,13 +60,14 @@ rnn_hidden_dim = CONFIG_DICT["model"]["rnn_hidden_dim"]
 
 device = CONFIG_DICT["device"]
 
+
 model_lr = CONFIG_DICT["experiment"]["train"]["model_lr"]
 eps = CONFIG_DICT["experiment"]["train"]["eps"]
 value_lr = CONFIG_DICT["experiment"]["train"]["value_lr"]
 action_lr = CONFIG_DICT["experiment"]["train"]["action_lr"]
 
 env_list = CONFIG_DICT["experiment"]["env_list"]
-test_env_name = CONFIG_DICT["experiment"]["test_env_name"]
+env_name = CONFIG_DICT["experiment"]["env_name"]
 action_space_list = [
     make_env(env_name).action_space.shape[0] for env_name in env_list
 ]
@@ -66,23 +77,18 @@ observation_space_list = [
 action_space = max(action_space_list)
 observation_space = max(observation_space_list)
 
-encoder = Encoder().to(device)
-rssm = RSSM(state_dim, action_space, rnn_hidden_dim, device)
-value_model = ValueModel(state_dim, rnn_hidden_dim).to(device)
-action_model = ActionModel(state_dim, rnn_hidden_dim, action_space).to(device)
+encoder_init = Encoder().to(device)
+rssm_init = RSSM(state_dim, action_space, rnn_hidden_dim, device)
+value_model_init = ValueModel(state_dim, rnn_hidden_dim).to(device)
+action_model_init = ActionModel(state_dim, rnn_hidden_dim, action_space).to(
+    device
+)
 
-model_params = (
-    list(encoder.parameters())
-    + list(rssm.transition.parameters())
-    + list(rssm.observation.parameters())
-    + list(rssm.reward.parameters())
-)
-model_optimizer = torch.optim.Adam(model_params, lr=model_lr, eps=eps)
-value_optimizer = torch.optim.Adam(
-    value_model.parameters(), lr=value_lr, eps=eps
-)
-action_optimizer = torch.optim.Adam(
-    action_model.parameters(), lr=action_lr, eps=eps
+
+source_replay_buffer = ReplayBuffer(
+    capacity=CONFIG_DICT["buffer"]["buffer_capacity"],
+    observation_shape=[64, 64, 3],
+    action_dim=action_space,
 )
 
 replay_buffer = ReplayBuffer(
@@ -94,9 +100,12 @@ replay_buffer = ReplayBuffer(
 
 def main():
 
-    for env_name in env_list:
-        env = make_env(env_name)
-        print(env_name)
+    models = (encoder_init, rssm_init, value_model_init, action_model_init)
+
+    # sourceタスクのスコアを算出する
+    for train_env_name in env_list:
+        env = make_env(train_env_name)
+        print(train_env_name)
         for episode in range(
             CONFIG_DICT["experiment"]["train"]["seed_episodes"]
         ):
@@ -110,13 +119,173 @@ def main():
                     padded_action = np.pad(
                         action, ((0, action_space - action.shape[0]))
                     )
-                    replay_buffer.push(obs, padded_action, reward, done)
+                    source_replay_buffer.push(obs, padded_action, reward, done)
 
                 else:
-                    replay_buffer.push(obs, action, reward, done)
+                    source_replay_buffer.push(obs, action, reward, done)
                 obs = next_obs
         del env
         gc.collect()
+
+    observations, actions, rewards, _ = source_replay_buffer.sample(
+        batch_size, chunk_length
+    )
+
+    encoder, rssm, value_model, action_model = calculate_grad(
+        (observations, actions, rewards),
+        models,
+        CONFIG_DICT["single_shot"]["method"],
+        device,
+        (
+            imagination_horizon,
+            gamma,
+            lambda_,
+            clip_grad_norm,
+            free_nats,
+            chunk_length,
+            batch_size,
+            state_dim,
+            rnn_hidden_dim,
+        ),
+    )
+
+    source_encoder_scores = get_score(encoder)
+    source_rssm_transition_scores = get_score(rssm.transition)
+    source_rssm_observation_scores = get_score(rssm.observation)
+    source_rssm_reward_scores = get_score(rssm.reward)
+    source_value_model_scores = get_score(value_model)
+    source_action_model_scores = get_score(action_model)
+
+    # target タスクのスコアを算出する
+    env = make_env(env_name)
+    print(env_name)
+    for episode in range(CONFIG_DICT["experiment"]["train"]["seed_episodes"]):
+        obs = env.reset()
+        done = False
+        while not done:
+            action = env.action_space.sample()
+            next_obs, reward, done, _ = env.step(action)
+            if action.shape[0] < action_space:
+                action = np.pad(action, ((0, action_space - action.shape[0])))
+            replay_buffer.push(obs, action, reward, done)
+            obs = next_obs
+    del env
+    gc.collect()
+
+    observations, actions, rewards, _ = replay_buffer.sample(
+        batch_size, chunk_length
+    )
+
+    encoder, rssm, value_model, action_model = calculate_grad(
+        (observations, actions, rewards),
+        models,
+        CONFIG_DICT["single_shot"]["method"],
+        device,
+        (
+            imagination_horizon,
+            gamma,
+            lambda_,
+            clip_grad_norm,
+            free_nats,
+            chunk_length,
+            batch_size,
+            state_dim,
+            rnn_hidden_dim,
+        ),
+    )
+
+    target_encoder_scores = get_score(encoder)
+    target_rssm_transition_scores = get_score(rssm.transition)
+    target_rssm_observation_scores = get_score(rssm.observation)
+    target_rssm_reward_scores = get_score(rssm.reward)
+    target_value_model_scores = get_score(value_model)
+    target_action_model_scores = get_score(action_model)
+
+    encoder_scores = get_ftl_score(
+        source_encoder_scores,
+        target_encoder_scores,
+        full_transfer_keys=["cv1", "cv2", "cv3", "cv4"],
+        fractional_transfer_keys=[],
+    )
+    rssm_transition_scores = get_ftl_score(
+        source_rssm_transition_scores,
+        target_rssm_transition_scores,
+        full_transfer_keys=[
+            "fc_state_action",
+            "fc_rnn_hidden",
+            "fc_state_mean_prior",
+            "fc_state_stddev_prior",
+            "fc_rnn_hidden_embedded_obs",
+            "fc_state_mean_posterior",
+            "fc_state_stddev_posterior",
+        ],
+        fractional_transfer_keys=[],
+    )
+    rssm_observation_scores = get_ftl_score(
+        source_rssm_observation_scores,
+        target_rssm_observation_scores,
+        full_transfer_keys=["fc", "dc1", "dc2", "dc3", "dc4"],
+        fractional_transfer_keys=[],
+    )
+    rssm_reward_scores = get_ftl_score(
+        source_rssm_reward_scores,
+        target_rssm_reward_scores,
+        full_transfer_keys=["fc1", "fc2", "fc3"],
+        fractional_transfer_keys=["fc4"],
+    )
+    value_model_scores = get_ftl_score(
+        source_value_model_scores,
+        target_value_model_scores,
+        full_transfer_keys=["fc1", "fc2", "fc3"],
+        fractional_transfer_keys=["fc4"],
+    )
+    action_model_scores = get_ftl_score(
+        source_action_model_scores,
+        target_action_model_scores,
+        full_transfer_keys=["fc1", "fc2", "fc3"],
+        fractional_transfer_keys=[],
+    )
+
+    keep_ratio = CONFIG_DICT["single_shot"]["keep_ratio"]
+    encoder_masks = get_masks(encoder_scores, keep_ratio)
+    rssm_transition_masks = get_masks(rssm_transition_scores, keep_ratio)
+    rssm_observation_masks = get_masks(rssm_observation_scores, keep_ratio)
+    rssm_reward_masks = get_masks(rssm_reward_scores, keep_ratio)
+    value_model_masks = get_masks(value_model_scores, keep_ratio)
+    action_model_masks = get_masks(action_model_scores, keep_ratio)
+
+    apply_masks(encoder, encoder_masks)
+    apply_masks(rssm.transition, rssm_transition_masks)
+    apply_masks(rssm.observation, rssm_observation_masks)
+    apply_masks(rssm.reward, rssm_reward_masks)
+    apply_masks(value_model, value_model_masks)
+    apply_masks(action_model, action_model_masks)
+
+    model_params = (
+        list(encoder.parameters())
+        + list(rssm.transition.parameters())
+        + list(rssm.observation.parameters())
+        + list(rssm.reward.parameters())
+    )
+    model_optimizer = torch.optim.Adam(model_params, lr=model_lr, eps=eps)
+    value_optimizer = torch.optim.Adam(
+        value_model.parameters(), lr=value_lr, eps=eps
+    )
+    action_optimizer = torch.optim.Adam(
+        action_model.parameters(), lr=action_lr, eps=eps
+    )
+
+    torch.save(
+        {
+            "encoder_scores": encoder_scores,
+            "rssm_transition_scores": rssm_transition_scores,
+            "rssm_observation_scores": rssm_observation_scores,
+            "rssm_reward_scores": rssm_reward_scores,
+            "value_model_scores": value_model_scores,
+            "action_model_scores": action_model_scores,
+        },
+        os.path.join(log_dir, "scores.pkl"),
+    )
 
     test_rewards = []
     episodes = []
@@ -129,42 +298,34 @@ def main():
         # 行動を決定するためのエージェントを宣言
         policy = Agent(encoder, rssm.transition, action_model)
 
-        for env_name in env_list:
-            env = make_env(env_name)
-            obs = env.reset()
-            done = False
-            total_reward = 0
-            while not done:
-                action = policy(obs)
-                action = action[: env.action_space.shape[0]]
-
-                # 探索のためにガウス分布に従うノイズを加える(explaration noise)
-                action += np.random.normal(
-                    0, np.sqrt(action_noise_var), env.action_space.shape[0]
-                )
-                next_obs, reward, done, _ = env.step(action)
-
-                if action.shape[0] < action_space:
-                    action = np.pad(
-                        action, ((0, action_space - action.shape[0]))
-                    )
-
-                # リプレイバッファに観測, 行動, 報酬, doneを格納
-                replay_buffer.push(obs, action, reward, done)
-
-                obs = next_obs
-                total_reward += reward
-            del env
-            gc.collect()
-            # 訓練時の報酬と経過時間をログとして表示
-            print(
-                "env : {} episode [{}/{}] is collected. Total reward is {}".format(
-                    env_name, episode + 1, all_episodes, total_reward
-                )
+        env = make_env(CONFIG_DICT["experiment"]["env_name"])
+        obs = env.reset()
+        done = False
+        total_reward = 0
+        while not done:
+            action = policy(obs)
+            action = action[: env.action_space.shape[0]]
+            # 探索のためにガウス分布に従うノイズを加える(explaration noise)
+            action += np.random.normal(
+                0, np.sqrt(action_noise_var), env.action_space.shape[0]
             )
-            print(
-                "elasped time for interaction: %.2fs" % (time.time() - start)
-            )
+            next_obs, reward, done, _ = env.step(action)
+
+            if action.shape[0] < action_space:
+                action = np.pad(action, ((0, action_space - action.shape[0])))
+
+            # リプレイバッファに観測, 行動, 報酬, doneを格納
+            replay_buffer.push(obs, action, reward, done)
+
+            obs = next_obs
+            total_reward += reward
+
+        # 訓練時の報酬と経過時間をログとして表示
+        print(
+            "episode [%4d/%4d] is collected. Total reward is %f"
+            % (episode + 1, all_episodes, total_reward)
+        )
+        print("elasped time for interaction: %.2fs" % (time.time() - start))
 
         # NNのパラメータを更新する
         start = time.time()
@@ -351,14 +512,19 @@ def main():
                     action_loss.item(),
                 )
             )
+
         print("elasped time for update: %.2fs" % (time.time() - start))
+
+        del env
+        gc.collect()
+
         # --------------------------------------------------------------
         #    テストフェーズ. 探索ノイズなしでの性能を評価する
         # --------------------------------------------------------------
         if (episode + 1) % test_interval == 0:
+            env = make_env(CONFIG_DICT["experiment"]["env_name"])
             policy = Agent(encoder, rssm.transition, action_model)
             start = time.time()
-            env = make_env(test_env_name)
             obs = env.reset()
             done = False
             total_reward = 0
@@ -373,9 +539,6 @@ def main():
                 % (episode + 1, all_episodes, total_reward)
             )
             print("elasped time for test: %.2fs" % (time.time() - start))
-            del env
-            gc.collect()
-
             test_rewards.append(total_reward)
             episodes.append(episode)
 
@@ -384,6 +547,9 @@ def main():
                 columns=["episodes", "test_rewards"],
             )
             df.to_csv(os.path.join(log_dir, "test_reward.csv"))
+
+            del env
+            gc.collect()
 
         if (episode + 1) % model_save_interval == 0:
             # 定期的に学習済みモデルのパラメータを保存する
@@ -418,16 +584,22 @@ def main():
 
 
 if __name__ == "__main__":
-    folder_name = (
-        "train_["
+    folder_name = os.path.join(
+        "SingleShot_"
+        + "train_["
         + "_".join(CONFIG_DICT["experiment"]["env_list"])
         + "]_test_["
-        + CONFIG_DICT["experiment"]["test_env_name"]
+        + CONFIG_DICT["experiment"]["env_name"]
         + "]"
-        + "_"
+        + "/"
+        + CONFIG_DICT["single_shot"]["method"]
+        + "/"
         + get_str_currentdate()
     )
     log_dir = os.path.join(CONFIG_DICT["logs"]["log_dir"], folder_name)
     os.makedirs(log_dir, exist_ok=True)
-    shutil_copy("./configs/multiple_env_config.py", log_dir)
+    shutil_copy(
+        "./configs/single_shot/single_shot_transfer_single_env_config.py",
+        log_dir,
+    )
     main()

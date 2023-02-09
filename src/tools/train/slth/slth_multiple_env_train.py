@@ -468,6 +468,12 @@ def main():
 
 
 if __name__ == "__main__":
+
+    if is_subnet_conv == CONFIG_DICT["slth"]["is_subnet_conv"]:
+        conv_type = "edge_popup"
+    else:
+        conv_type = "biprop"
+
     folder_name = (
         "SLTH_"
         + "train_["
@@ -475,6 +481,8 @@ if __name__ == "__main__":
         + "]_test_["
         + CONFIG_DICT["experiment"]["test_env_name"]
         + "]"
+        + "/"
+        + conv_type
         + "/"
         + get_str_currentdate()
     )
