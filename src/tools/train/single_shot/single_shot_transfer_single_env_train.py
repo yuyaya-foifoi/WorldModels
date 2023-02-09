@@ -530,6 +530,7 @@ def main():
             total_reward = 0
             while not done:
                 action = policy(obs, training=False)
+                action = action[: env.action_space.shape[0]]
                 obs, reward, done, _ = env.step(action)
                 total_reward += reward
 
