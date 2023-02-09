@@ -1,7 +1,7 @@
 
 import torch
 
-SLTH_TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
+SINGLE_SHOT_TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
     "experiment": {
         "env_list": [
             "AntBulletEnv-v0",
@@ -34,10 +34,9 @@ SLTH_TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
         "state_dim": 30,  # 確率的状態の次元
         "rnn_hidden_dim": 200,  # 決定的状態（RNNの隠れ状態）の次元
     },
-    "slth":{
-        "remain_rate":0.3,
-        "init":'scaled_signed_constant',
-        "is_subnet_conv":True
+    "single_shot":{
+        "keep_ratio":0.3,
+        "method": 'synflow' # synflow or SNIP
     },
     "buffer" : {
         'buffer_capacity' : 200000

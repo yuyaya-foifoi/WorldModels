@@ -14,11 +14,12 @@ from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 
-from configs import SLTH_SINGLE_ENV_CONFIG_DICT as CONFIG_DICT
+from configs import SINGLE_SHOT_SINGLE_ENV_CONFIG_DICT as CONFIG_DICT
 from src.agent import Agent
 from src.buffer import ReplayBuffer
 from src.loss import lambda_target
 from src.model import RSSM, ActionModel, Encoder, ValueModel
+from src.prune import apply_masks, calculate_grad, get_masks, get_score
 from src.slth.utils import modify_module_for_slth
 from src.utils import make_env, preprocess_obs
 from src.utils.date import get_str_currentdate
@@ -58,76 +59,13 @@ value_lr = CONFIG_DICT["experiment"]["train"]["value_lr"]
 action_lr = CONFIG_DICT["experiment"]["train"]["action_lr"]
 
 _env = make_env(CONFIG_DICT["experiment"]["env_name"])
-encoder = Encoder().to(device)
-rssm = RSSM(state_dim, _env.action_space.shape[0], rnn_hidden_dim, device)
-value_model = ValueModel(state_dim, rnn_hidden_dim).to(device)
-action_model = ActionModel(
+encoder_init = Encoder().to(device)
+rssm_init = RSSM(state_dim, _env.action_space.shape[0], rnn_hidden_dim, device)
+value_model_init = ValueModel(state_dim, rnn_hidden_dim).to(device)
+action_model_init = ActionModel(
     state_dim, rnn_hidden_dim, _env.action_space.shape[0]
 ).to(device)
 
-# slth
-remain_rate = CONFIG_DICT["slth"]["remain_rate"]
-init = CONFIG_DICT["slth"]["init"]
-is_subnet_conv = CONFIG_DICT["slth"]["is_subnet_conv"]
-
-encoder = modify_module_for_slth(
-    model=encoder,
-    remain_rate=remain_rate,
-    init_mode=init,
-    is_subnet_conv=is_subnet_conv,
-).to(device)
-
-action_model = modify_module_for_slth(
-    model=action_model,
-    omit_prefix_list=["fc4"],
-    remain_rate=remain_rate,
-    init_mode=init,
-    is_subnet_conv=is_subnet_conv,
-).to(device)
-
-value_model = modify_module_for_slth(
-    model=value_model,
-    remain_rate=remain_rate,
-    init_mode=init,
-    is_subnet_conv=is_subnet_conv,
-).to(device)
-
-rssm.transition = modify_module_for_slth(
-    model=rssm.transition,
-    remain_rate=remain_rate,
-    init_mode=init,
-    is_subnet_conv=is_subnet_conv,
-).to(device)
-
-
-rssm.observation = modify_module_for_slth(
-    model=rssm.observation,
-    remain_rate=remain_rate,
-    init_mode=init,
-    is_subnet_conv=is_subnet_conv,
-).to(device)
-
-rssm.reward = modify_module_for_slth(
-    model=rssm.reward,
-    remain_rate=remain_rate,
-    init_mode=init,
-    is_subnet_conv=is_subnet_conv,
-).to(device)
-
-
-model_params = (
-    list(encoder.parameters())
-    + list(rssm.transition.parameters())
-    + list(rssm.observation.parameters())
-    + list(rssm.reward.parameters())
-)
-model_optimizer = torch.optim.Adam(model_params, lr=model_lr, eps=eps)
-value_optimizer = torch.optim.Adam(
-    value_model.parameters(), lr=value_lr, eps=eps
-)
-action_optimizer = torch.optim.Adam(
-    action_model.parameters(), lr=action_lr, eps=eps
-)
 
 replay_buffer = ReplayBuffer(
     capacity=CONFIG_DICT["buffer"]["buffer_capacity"],
@@ -137,6 +75,8 @@ replay_buffer = ReplayBuffer(
 
 
 def main():
+
+    models = (encoder_init, rssm_init, value_model_init, action_model_init)
 
     env = make_env(CONFIG_DICT["experiment"]["env_name"])
     for episode in range(CONFIG_DICT["experiment"]["train"]["seed_episodes"]):
@@ -149,6 +89,76 @@ def main():
             obs = next_obs
     del env
     gc.collect()
+
+    observations, actions, rewards, _ = replay_buffer.sample(
+        batch_size, chunk_length
+    )
+
+    encoder, rssm, value_model, action_model = calculate_grad(
+        (observations, actions, rewards),
+        models,
+        CONFIG_DICT["single_shot"]["method"],
+        device,
+        (
+            imagination_horizon,
+            gamma,
+            lambda_,
+            clip_grad_norm,
+            free_nats,
+            chunk_length,
+            batch_size,
+            state_dim,
+            rnn_hidden_dim,
+        ),
+    )
+
+    encoder_scores = get_score(encoder)
+    rssm_transition_scores = get_score(rssm.transition)  # observation, reward
+    rssm_observation_scores = get_score(rssm.observation)
+    rssm_reward_scores = get_score(rssm.reward)
+    value_model_scores = get_score(value_model)
+    action_model_scores = get_score(action_model)
+
+    keep_ratio = CONFIG_DICT["single_shot"]["keep_ratio"]
+    encoder_masks = get_masks(encoder_scores, keep_ratio)
+    rssm_transition_masks = get_masks(rssm_transition_scores, keep_ratio)
+    rssm_observation_masks = get_masks(rssm_observation_scores, keep_ratio)
+    rssm_reward_masks = get_masks(rssm_reward_scores, keep_ratio)
+    value_model_masks = get_masks(value_model_scores, keep_ratio)
+    action_model_masks = get_masks(action_model_scores, keep_ratio)
+
+    apply_masks(encoder, encoder_masks)
+    apply_masks(rssm.transition, rssm_transition_masks)
+    apply_masks(rssm.observation, rssm_observation_masks)
+    apply_masks(rssm.reward, rssm_reward_masks)
+    apply_masks(value_model, value_model_masks)
+    apply_masks(action_model, action_model_masks)
+
+    model_params = (
+        list(encoder.parameters())
+        + list(rssm.transition.parameters())
+        + list(rssm.observation.parameters())
+        + list(rssm.reward.parameters())
+    )
+    model_optimizer = torch.optim.Adam(model_params, lr=model_lr, eps=eps)
+    value_optimizer = torch.optim.Adam(
+        value_model.parameters(), lr=value_lr, eps=eps
+    )
+    action_optimizer = torch.optim.Adam(
+        action_model.parameters(), lr=action_lr, eps=eps
+    )
+
+    torch.save(
+        {
+            "encoder_scores": encoder_scores,
+            "rssm_transition_scores": rssm_transition_scores,
+            "rssm_observation_scores": rssm_observation_scores,
+            "rssm_reward_scores": rssm_reward_scores,
+            "value_model_scores": value_model_scores,
+            "action_model_scores": action_model_scores,
+        },
+        os.path.join(log_dir, "scores.pkl"),
+    )
 
     test_rewards = []
     episodes = []
@@ -442,20 +452,17 @@ def main():
 
 
 if __name__ == "__main__":
-    if is_subnet_conv == CONFIG_DICT["slth"]["is_subnet_conv"]:
-        conv_type = "edge_popup"
-    else:
-        conv_type = "biprop"
-
     log_dir = os.path.join(
         CONFIG_DICT["logs"]["log_dir"],
-        "SLTH_"
+        "SingleShot_"
         + CONFIG_DICT["experiment"]["env_name"]
         + "/"
-        + conv_type
+        + CONFIG_DICT["single_shot"]["method"]
         + "/"
         + get_str_currentdate(),
     )
     os.makedirs(log_dir, exist_ok=True)
-    shutil_copy("./configs/slth/slth_single_env_config.py", log_dir)
+    shutil_copy(
+        "./configs/single_shot/single_shot_single_env_config.py", log_dir
+    )
     main()

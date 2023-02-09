@@ -547,12 +547,19 @@ def main():
 
 
 if __name__ == "__main__":
+    if is_subnet_conv == CONFIG_DICT["slth"]["is_subnet_conv"]:
+        conv_type = "edge_popup"
+    else:
+        conv_type = "biprop"
+
     folder_name = (
-        "slth_"
+        "SLTH_"
         + "transfered_"
         + CONFIG_DICT["experiment"]["transfer_type"]
         + "_"
         + CONFIG_DICT["experiment"]["env_name"]
+        + "/"
+        + conv_type
         + "/"
         + get_str_currentdate()
     )

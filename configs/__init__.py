@@ -4,4 +4,7 @@ from .without_prune.transfer_single_env_config import TRANSFERED_SINGLE_ENV_CONF
 from .slth.slth_single_env_config import SLTH_SINGLE_ENV_CONFIG_DICT #noqa
 from .slth.slth_multiple_env_config import SLTH_MULTIPLE_ENV_CONFIG_DICT #noqa
 from .slth.slth_transfer_single_env_config import SLTH_TRANSFERED_SINGLE_ENV_CONFIG_DICT #noqa
+from .single_shot.single_shot_single_env_config import SINGLE_SHOT_SINGLE_ENV_CONFIG_DICT #noqa
+from .single_shot.single_shot_transfer_single_env_config import SINGLE_SHOT_TRANSFERED_SINGLE_ENV_CONFIG_DICT #noqa
+
 
