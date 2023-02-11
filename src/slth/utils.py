@@ -19,6 +19,7 @@ def modify_module_for_slth(
     init_mode: str = None,
     abs_score: bool = True,
     is_subnet_conv: bool = True,
+    score_init="Kaiming",
 ):
     named_modules = [(n, l) for n, l in model.named_modules()]
     print("#Modules: {}".format(len(named_modules)))
@@ -28,15 +29,31 @@ def modify_module_for_slth(
         elif isinstance(layer, nn.Conv2d):
 
             if is_subnet_conv:
-                print("Replace nn.Conv2d with SubnetConv: {}".format(name))
-                slth_layer = layers.SubnetConv(
-                    layer.in_channels,
-                    layer.out_channels,
-                    stride=layer.stride,
-                    kernel_size=layer.kernel_size,
-                    padding=layer.padding,
-                    bias=True,
-                )
+                if score_init == "Kaiming":
+                    print("Replace nn.Conv2d with SubnetConv: {}".format(name))
+                    slth_layer = layers.SubnetConv(
+                        layer.in_channels,
+                        layer.out_channels,
+                        stride=layer.stride,
+                        kernel_size=layer.kernel_size,
+                        padding=layer.padding,
+                        bias=True,
+                    )
+                else:
+                    print(
+                        "Replace nn.Conv2d with SingleShotConv: {}".format(
+                            name
+                        )
+                    )
+                    slth_layer = layers.SingleShotConv(
+                        layer.in_channels,
+                        layer.out_channels,
+                        stride=layer.stride,
+                        kernel_size=layer.kernel_size,
+                        padding=layer.padding,
+                        bias=True,
+                    )
+
             else:
                 print("Replace nn.Conv2d with QuantnetConv: {}".format(name))
                 slth_layer = layers.QuantnetConv(
@@ -50,12 +67,76 @@ def modify_module_for_slth(
             slth_layer.set_remain_rate(remain_rate)
             slth_layer.init_weight(init_mode)
             recursive_setattr(model, name, slth_layer)
+
+        elif isinstance(layer, nn.ConvTranspose2d):
+
+            if is_subnet_conv:
+                if score_init == "Kaiming":
+                    print(
+                        "Replace nn.ConvTranspose2d with SubnetTransposeConv: {}".format(
+                            name
+                        )
+                    )
+                    slth_layer = layers.SubnetTransposeConv(
+                        layer.in_channels,
+                        layer.out_channels,
+                        stride=layer.stride,
+                        kernel_size=layer.kernel_size,
+                        padding=layer.padding,
+                        bias=True,
+                    )
+                else:
+                    print(
+                        "Replace nn.ConvTranspose2d with SingleShotTransposeConv: {}".format(
+                            name
+                        )
+                    )
+                    slth_layer = layers.SingleShotTransposeConv(
+                        layer.in_channels,
+                        layer.out_channels,
+                        stride=layer.stride,
+                        kernel_size=layer.kernel_size,
+                        padding=layer.padding,
+                        bias=True,
+                    )
+
+            else:
+                print(
+                    "Replace nn.ConvTranspose2d with QuantnetTransposeConv: {}".format(
+                        name
+                    )
+                )
+                slth_layer = layers.QuantnetTransposeConv(
+                    layer.in_channels,
+                    layer.out_channels,
+                    stride=layer.stride,
+                    kernel_size=layer.kernel_size,
+                    padding=layer.padding,
+                    bias=True,
+                )
+            slth_layer.set_remain_rate(remain_rate)
+            slth_layer.init_weight(init_mode)
+            recursive_setattr(model, name, slth_layer)
+
         elif isinstance(layer, nn.Linear):
             if is_subnet_conv:
-                print("Replace nn.Linear with SubnetLinear: {}".format(name))
-                slth_layer = layers.SubsetLinear(
-                    layer.in_features, layer.out_features, bias=False
-                )
+                if score_init == "Kaiming":
+                    print(
+                        "Replace nn.Linear with SubnetLinear: {}".format(name)
+                    )
+                    slth_layer = layers.SubsetLinear(
+                        layer.in_features, layer.out_features, bias=False
+                    )
+                else:
+                    print(
+                        "Replace nn.Linear with SingleShotLinear: {}".format(
+                            name
+                        )
+                    )
+                    slth_layer = layers.SingleShotLinear(
+                        layer.in_features, layer.out_features, bias=False
+                    )
+
             else:
                 print("Replace nn.Linear with QuantnetLinear: {}".format(name))
                 slth_layer = layers.QuantnetLinear(

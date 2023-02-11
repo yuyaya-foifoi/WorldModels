@@ -2,11 +2,14 @@ import torch
 import torch.nn as nn
 
 
-def get_score(model) -> dict:
+def get_score(model, method: str) -> dict:
     scores = {}
     for name, layer in model.named_modules():
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            scores[name] = torch.abs(layer.weight.grad) * layer.weight
+            if method == "SNIP":
+                scores[name] = torch.abs(layer.weight.grad * layer.weight)
+            elif method == "synflow":
+                scores[name] = layer.weight.grad * layer.weight
     return scores
 
 

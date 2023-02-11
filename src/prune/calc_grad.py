@@ -9,6 +9,13 @@ from src.loss import lambda_target
 from src.utils import preprocess_obs
 
 
+def get_abs_state_dict(state_dict):
+    cp_state_dict = copy.deepcopy(state_dict)
+    for k, v in cp_state_dict.items():
+        cp_state_dict[k] = torch.abs(v)
+    return cp_state_dict
+
+
 def calculate_grad(
     inputs: tuple, models: tuple, prune_type: str, device: str, params: tuple
 ) -> tuple:
@@ -33,11 +40,38 @@ def calculate_grad(
         actions = actions * 0 + 1
         rewards = rewards * 0 + 1
 
-    encoder, rssm, value_model, action_model = models
-    encoder = copy.deepcopy(encoder)
-    rssm = copy.deepcopy(rssm)
-    value_model = copy.deepcopy(value_model)
-    action_model = copy.deepcopy(action_model)
+    (
+        encoder_original,
+        rssm_original,
+        value_model_original,
+        action_model_original,
+    ) = models
+    encoder = copy.deepcopy(encoder_original)
+    rssm = copy.deepcopy(rssm_original)
+    value_model = copy.deepcopy(value_model_original)
+    action_model = copy.deepcopy(action_model_original)
+
+    if prune_type == "SNIP":
+        pass
+    elif prune_type == "synflow":
+        encoder.load_state_dict(get_abs_state_dict(encoder.state_dict()))
+
+        rssm.transition.load_state_dict(
+            get_abs_state_dict(rssm.transition.state_dict())
+        )
+        rssm.observation.load_state_dict(
+            get_abs_state_dict(rssm.observation.state_dict())
+        )
+        rssm.reward.load_state_dict(
+            get_abs_state_dict(rssm.reward.state_dict())
+        )
+
+        value_model.load_state_dict(
+            get_abs_state_dict(value_model.state_dict())
+        )
+        action_model.load_state_dict(
+            get_abs_state_dict(action_model.state_dict())
+        )
 
     model_params = (
         list(encoder.parameters())
@@ -192,4 +226,9 @@ def calculate_grad(
     value_loss.backward()
     clip_grad_norm_(value_model.parameters(), clip_grad_norm)
 
-    return (encoder, rssm, value_model, action_model)
+    return (
+        encoder_original,
+        rssm_original,
+        value_model_original,
+        action_model_original,
+    )

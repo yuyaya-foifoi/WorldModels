@@ -14,11 +14,12 @@ from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 
-from configs import SINGLE_ENV_CONFIG_DICT as CONFIG_DICT
+from configs import SLTH_SINGLE_ENV_CONFIG_DICT as CONFIG_DICT
 from src.agent import Agent
 from src.buffer import ReplayBuffer
 from src.loss import lambda_target
 from src.model import RSSM, ActionModel, Encoder, ValueModel
+from src.slth.utils import modify_module_for_slth
 from src.utils import make_env, preprocess_obs
 from src.utils.date import get_str_currentdate
 from src.utils.save import shutil_copy
@@ -67,6 +68,61 @@ value_model = ValueModel(state_dim, rnn_hidden_dim).to(device)
 action_model = ActionModel(
     state_dim, rnn_hidden_dim, _env.action_space.shape[0]
 ).to(device)
+
+# slth
+remain_rate = CONFIG_DICT["slth"]["remain_rate"]
+init = CONFIG_DICT["slth"]["init"]
+is_subnet_conv = CONFIG_DICT["slth"]["is_subnet_conv"]
+
+encoder = modify_module_for_slth(
+    model=encoder,
+    remain_rate=remain_rate,
+    init_mode=init,
+    is_subnet_conv=is_subnet_conv,
+    score_init="synflow",
+).to(device)
+
+action_model = modify_module_for_slth(
+    model=action_model,
+    remain_rate=remain_rate,
+    init_mode=init,
+    is_subnet_conv=is_subnet_conv,
+    score_init="synflow",
+).to(device)
+
+value_model = modify_module_for_slth(
+    model=value_model,
+    remain_rate=remain_rate,
+    init_mode=init,
+    is_subnet_conv=is_subnet_conv,
+    score_init="synflow",
+).to(device)
+
+rssm.transition = modify_module_for_slth(
+    model=rssm.transition,
+    remain_rate=remain_rate,
+    init_mode=init,
+    is_subnet_conv=is_subnet_conv,
+    score_init="synflow",
+).to(device)
+
+
+rssm.observation = modify_module_for_slth(
+    model=rssm.observation,
+    remain_rate=remain_rate,
+    init_mode=init,
+    is_subnet_conv=is_subnet_conv,
+    score_init="synflow",
+).to(device)
+
+rssm.reward = modify_module_for_slth(
+    model=rssm.reward,
+    remain_rate=remain_rate,
+    init_mode=init,
+    is_subnet_conv=is_subnet_conv,
+    score_init="synflow",
+).to(device)
+
 
 model_params = (
     list(encoder.parameters())
@@ -395,15 +451,22 @@ def main():
 
 
 if __name__ == "__main__":
+    if CONFIG_DICT["slth"]["is_subnet_conv"]:
+        conv_type = "edge_popup"
+    else:
+        conv_type = "biprop"
 
     log_dir = os.path.join(
         CONFIG_DICT["logs"]["log_dir"],
-        "without_prune",
+        "slth",
         "single_env",
         CONFIG_DICT["experiment"]["env_name"],
+        "synflow_init_edge_popup",  # conv_type,
+        str(CONFIG_DICT["slth"]["remain_rate"]),
         str(CONFIG_DICT["seed"]),
         get_str_currentdate(),
     )
+
     os.makedirs(log_dir, exist_ok=True)
-    shutil_copy("./configs/without_prune/single_env_config.py", log_dir)
+    shutil_copy("./configs/slth/slth_single_env_config.py", log_dir)
     main()

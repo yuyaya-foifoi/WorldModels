@@ -1,6 +1,7 @@
 import torch
 
 SLTH_SINGLE_ENV_CONFIG_DICT = {
+    'seed' : 2,
     "experiment": {
         "env_name": "HalfCheetahBulletEnv-v0",
         "train": {
@@ -9,7 +10,7 @@ SLTH_SINGLE_ENV_CONFIG_DICT = {
             "action_lr": 8e-5,
             "eps": 1e-4,
             "seed_episodes": 10,  # 最初にランダム行動で探索するエピソード数
-            "all_episodes": 50,  # 学習全体のエピソード数（300ほどで, ある程度収束します）
+            "all_episodes": 100,  # 学習全体のエピソード数（300ほどで, ある程度収束します）
             "test_interval": 5,  # 何エピソードごとに探索ノイズなしのテストを行うか
             "model_save_interval": 20,  # NNの重みを何エピソードごとに保存するか
             "collect_interval": 100,  # 何回のNNの更新ごとに経験を集めるか（＝1エピソード経験を集めるごとに何回更新するか）
@@ -30,7 +31,9 @@ SLTH_SINGLE_ENV_CONFIG_DICT = {
     "slth":{
         "remain_rate":0.3,
         "init":'scaled_signed_constant',
-        "is_subnet_conv":True
+        "is_subnet_conv":False, #True subenet False biprop
+        'score_init': 'Kaiming' #Kaiming or synflow
+        
     },
     "buffer" : {
         'buffer_capacity' : 200000

@@ -22,6 +22,10 @@ from src.model import RSSM, ActionModel, Encoder, ValueModel
 from src.utils import make_env, preprocess_obs
 from src.utils.date import get_str_currentdate
 from src.utils.save import shutil_copy
+from src.utils.seed import set_seed
+
+set_seed(CONFIG_DICT["seed"])
+
 
 seed_episodes = CONFIG_DICT["experiment"]["train"]["seed_episodes"]
 
@@ -418,16 +422,19 @@ def main():
 
 
 if __name__ == "__main__":
-    folder_name = (
+
+    log_dir = os.path.join(
+        CONFIG_DICT["logs"]["log_dir"],
+        "without_prune",
+        "multiple_env",
         "train_["
         + "_".join(CONFIG_DICT["experiment"]["env_list"])
         + "]_test_["
         + CONFIG_DICT["experiment"]["test_env_name"]
-        + "]"
-        + "_"
-        + get_str_currentdate()
+        + "]",
+        str(CONFIG_DICT["seed"]),
+        get_str_currentdate(),
     )
-    log_dir = os.path.join(CONFIG_DICT["logs"]["log_dir"], folder_name)
     os.makedirs(log_dir, exist_ok=True)
-    shutil_copy("./configs/multiple_env_config.py", log_dir)
+    shutil_copy("./configs/without_prune/multiple_env_config.py", log_dir)
     main()

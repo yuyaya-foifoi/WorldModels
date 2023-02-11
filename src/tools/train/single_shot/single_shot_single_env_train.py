@@ -24,6 +24,9 @@ from src.slth.utils import modify_module_for_slth
 from src.utils import make_env, preprocess_obs
 from src.utils.date import get_str_currentdate
 from src.utils.save import shutil_copy
+from src.utils.seed import set_seed
+
+set_seed(CONFIG_DICT["seed"])
 
 seed_episodes = CONFIG_DICT["experiment"]["train"]["seed_episodes"]
 
@@ -73,6 +76,8 @@ replay_buffer = ReplayBuffer(
     action_dim=_env.action_space.shape[0],
 )
 
+single_shot_method = CONFIG_DICT["single_shot"]["method"]
+
 
 def main():
 
@@ -112,12 +117,14 @@ def main():
         ),
     )
 
-    encoder_scores = get_score(encoder)
-    rssm_transition_scores = get_score(rssm.transition)  # observation, reward
-    rssm_observation_scores = get_score(rssm.observation)
-    rssm_reward_scores = get_score(rssm.reward)
-    value_model_scores = get_score(value_model)
-    action_model_scores = get_score(action_model)
+    encoder_scores = get_score(encoder, single_shot_method)
+    rssm_transition_scores = get_score(
+        rssm.transition, single_shot_method
+    )  # observation, reward
+    rssm_observation_scores = get_score(rssm.observation, single_shot_method)
+    rssm_reward_scores = get_score(rssm.reward, single_shot_method)
+    value_model_scores = get_score(value_model, single_shot_method)
+    action_model_scores = get_score(action_model, single_shot_method)
 
     keep_ratio = CONFIG_DICT["single_shot"]["keep_ratio"]
     encoder_masks = get_masks(encoder_scores, keep_ratio)
@@ -454,12 +461,13 @@ def main():
 if __name__ == "__main__":
     log_dir = os.path.join(
         CONFIG_DICT["logs"]["log_dir"],
-        "SingleShot_"
-        + CONFIG_DICT["experiment"]["env_name"]
-        + "/"
-        + CONFIG_DICT["single_shot"]["method"]
-        + "/"
-        + get_str_currentdate(),
+        "single_shot",
+        "single_env",
+        CONFIG_DICT["experiment"]["env_name"],
+        CONFIG_DICT["single_shot"]["method"],
+        str(CONFIG_DICT["single_shot"]["keep_ratio"]),
+        str(CONFIG_DICT["seed"]),
+        get_str_currentdate(),
     )
     os.makedirs(log_dir, exist_ok=True)
     shutil_copy(

@@ -1,7 +1,11 @@
 
 import torch
 
+edge_popup_weight_path = './logs/slth/multiple_env/train_[AntBulletEnv-v0_HopperBulletEnv-v0]_test_[HalfCheetahBulletEnv-v0]/edge_popup/0.3/0/20230210-115957/episode_0100'
+biprop_weight_path = './logs/slth/multiple_env/train_[AntBulletEnv-v0_HopperBulletEnv-v0]_test_[HalfCheetahBulletEnv-v0]/biprop/0.3/0/20230210-153519/episode_0100'
+
 SLTH_TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
+    'seed': 2,
     "experiment": {
         "env_list": [
             "AntBulletEnv-v0",
@@ -14,7 +18,7 @@ SLTH_TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
             "action_lr": 8e-5,
             "eps": 1e-4,
             "seed_episodes": 10,  # 最初にランダム行動で探索するエピソード数
-            "all_episodes": 50,  # 学習全体のエピソード数（300ほどで, ある程度収束します）
+            "all_episodes": 100,  # 学習全体のエピソード数（300ほどで, ある程度収束します）
             "test_interval": 5,  # 何エピソードごとに探索ノイズなしのテストを行うか
             "model_save_interval": 20,  # NNの重みを何エピソードごとに保存するか
             "collect_interval": 100,  # 何回のNNの更新ごとに経験を集めるか（＝1エピソード経験を集めるごとに何回更新するか）
@@ -28,7 +32,8 @@ SLTH_TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
             "free_nats": 3,  # KL誤差（RSSMのTransitionModelにおけるpriorとposteriorの間の誤差）がこの値以下の場合, 無視する
         },
         "transfer_type" : 'fractional', #full_transfer or fractional
-        "transfer_path": "./logs/SLTH_train_[AntBulletEnv-v0_HopperBulletEnv-v0]_test_[HalfCheetahBulletEnv-v0]/20230202-160522/episode_0020"
+        "transfer_path": edge_popup_weight_path
+        
     },
     "model": {
         "state_dim": 30,  # 確率的状態の次元
@@ -37,7 +42,7 @@ SLTH_TRANSFERED_SINGLE_ENV_CONFIG_DICT = {
     "slth":{
         "remain_rate":0.3,
         "init":'scaled_signed_constant',
-        "is_subnet_conv":True
+        "is_subnet_conv":True # True=edge_popup, False=biprop
     },
     "buffer" : {
         'buffer_capacity' : 200000

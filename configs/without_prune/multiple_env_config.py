@@ -1,6 +1,7 @@
 import torch
 
 MULTIPLE_ENV_CONFIG_DICT = {
+    'seed':0,
     "experiment": {
         "env_list": [
             #"HopperBulletEnv-v0",
@@ -14,7 +15,7 @@ MULTIPLE_ENV_CONFIG_DICT = {
             "action_lr": 8e-5,
             "eps": 1e-4,
             "seed_episodes": 10,  # 最初にランダム行動で探索するエピソード数
-            "all_episodes": 50,  # 学習全体のエピソード数（300ほどで, ある程度収束します）
+            "all_episodes": 100,  # 学習全体のエピソード数（300ほどで, ある程度収束します）
             "test_interval": 5,  # 何エピソードごとに探索ノイズなしのテストを行うか
             "model_save_interval": 20,  # NNの重みを何エピソードごとに保存するか
             "collect_interval": 100,  # 何回のNNの更新ごとに経験を集めるか（＝1エピソード経験を集めるごとに何回更新するか）

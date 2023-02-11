@@ -14,18 +14,22 @@ from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 
-from configs import SINGLE_ENV_CONFIG_DICT as CONFIG_DICT
+from configs import SINGLE_SHOT_SINGLE_ENV_CONFIG_DICT as CONFIG_DICT
 from src.agent import Agent
 from src.buffer import ReplayBuffer
 from src.loss import lambda_target
 from src.model import RSSM, ActionModel, Encoder, ValueModel
+from src.prune import apply_masks, calculate_grad, get_masks, get_score
+from src.slth.utils import modify_module_for_slth
 from src.utils import make_env, preprocess_obs
 from src.utils.date import get_str_currentdate
 from src.utils.save import shutil_copy
 from src.utils.seed import set_seed
+from src.prune.layerwise import (
+    modify_module_for_layer_wise_single_shot_pruning,
+)
 
 set_seed(CONFIG_DICT["seed"])
-
 
 seed_episodes = CONFIG_DICT["experiment"]["train"]["seed_episodes"]
 
@@ -61,26 +65,13 @@ value_lr = CONFIG_DICT["experiment"]["train"]["value_lr"]
 action_lr = CONFIG_DICT["experiment"]["train"]["action_lr"]
 
 _env = make_env(CONFIG_DICT["experiment"]["env_name"])
-encoder = Encoder().to(device)
+encoder_init = Encoder().to(device)
 rssm = RSSM(state_dim, _env.action_space.shape[0], rnn_hidden_dim, device)
-value_model = ValueModel(state_dim, rnn_hidden_dim).to(device)
-action_model = ActionModel(
+value_model_init = ValueModel(state_dim, rnn_hidden_dim).to(device)
+action_model_init = ActionModel(
     state_dim, rnn_hidden_dim, _env.action_space.shape[0]
 ).to(device)
 
-model_params = (
-    list(encoder.parameters())
-    + list(rssm.transition.parameters())
-    + list(rssm.observation.parameters())
-    + list(rssm.reward.parameters())
-)
-model_optimizer = torch.optim.Adam(model_params, lr=model_lr, eps=eps)
-value_optimizer = torch.optim.Adam(
-    value_model.parameters(), lr=value_lr, eps=eps
-)
-action_optimizer = torch.optim.Adam(
-    action_model.parameters(), lr=action_lr, eps=eps
-)
 
 replay_buffer = ReplayBuffer(
     capacity=CONFIG_DICT["buffer"]["buffer_capacity"],
@@ -88,8 +79,12 @@ replay_buffer = ReplayBuffer(
     action_dim=_env.action_space.shape[0],
 )
 
+single_shot_method = CONFIG_DICT["single_shot"]["method"]
+
 
 def main():
+
+    models = (encoder_init, rssm, value_model_init, action_model_init)
 
     env = make_env(CONFIG_DICT["experiment"]["env_name"])
     for episode in range(CONFIG_DICT["experiment"]["train"]["seed_episodes"]):
@@ -102,6 +97,48 @@ def main():
             obs = next_obs
     del env
     gc.collect()
+
+    observations, actions, rewards, _ = replay_buffer.sample(
+        batch_size, chunk_length
+    )
+
+    encoder = modify_module_for_layer_wise_single_shot_pruning(
+        model=encoder_init
+    ).to(device)
+
+    action_model = modify_module_for_layer_wise_single_shot_pruning(
+        model=action_model_init
+    ).to(device)
+
+    value_model = modify_module_for_layer_wise_single_shot_pruning(
+        model=value_model_init
+    ).to(device)
+
+    rssm.transition = modify_module_for_layer_wise_single_shot_pruning(
+        model=rssm.transition
+    ).to(device)
+
+    rssm.observation = modify_module_for_layer_wise_single_shot_pruning(
+        model=rssm.observation
+    ).to(device)
+
+    rssm.reward = modify_module_for_layer_wise_single_shot_pruning(
+        model=rssm.reward
+    ).to(device)
+
+    model_params = (
+        list(encoder.parameters())
+        + list(rssm.transition.parameters())
+        + list(rssm.observation.parameters())
+        + list(rssm.reward.parameters())
+    )
+    model_optimizer = torch.optim.Adam(model_params, lr=model_lr, eps=eps)
+    value_optimizer = torch.optim.Adam(
+        value_model.parameters(), lr=value_lr, eps=eps
+    )
+    action_optimizer = torch.optim.Adam(
+        action_model.parameters(), lr=action_lr, eps=eps
+    )
 
     test_rewards = []
     episodes = []
@@ -395,15 +432,18 @@ def main():
 
 
 if __name__ == "__main__":
-
     log_dir = os.path.join(
         CONFIG_DICT["logs"]["log_dir"],
-        "without_prune",
+        "single_shot",
         "single_env",
         CONFIG_DICT["experiment"]["env_name"],
+        "layerwise_synflow",
+        str(CONFIG_DICT["single_shot"]["keep_ratio"]),
         str(CONFIG_DICT["seed"]),
         get_str_currentdate(),
     )
     os.makedirs(log_dir, exist_ok=True)
-    shutil_copy("./configs/without_prune/single_env_config.py", log_dir)
+    shutil_copy(
+        "./configs/single_shot/single_shot_single_env_config.py", log_dir
+    )
     main()

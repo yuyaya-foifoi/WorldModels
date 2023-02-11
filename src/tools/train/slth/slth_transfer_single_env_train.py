@@ -25,6 +25,10 @@ from src.slth.utils import modify_module_for_slth
 from src.utils import make_env, preprocess_obs
 from src.utils.date import get_str_currentdate
 from src.utils.save import shutil_copy
+from src.utils.seed import set_seed
+
+set_seed(CONFIG_DICT["seed"])
+
 
 seed_episodes = CONFIG_DICT["experiment"]["train"]["seed_episodes"]
 
@@ -97,7 +101,7 @@ encoder = modify_module_for_slth(
 
 action_model = modify_module_for_slth(
     model=action_model,
-    omit_prefix_list=["fc4"],
+    omit_prefix_list=[],
     remain_rate=remain_rate,
     init_mode=init,
     is_subnet_conv=is_subnet_conv,
@@ -547,23 +551,25 @@ def main():
 
 
 if __name__ == "__main__":
-    if is_subnet_conv == CONFIG_DICT["slth"]["is_subnet_conv"]:
+    if CONFIG_DICT["slth"]["is_subnet_conv"]:
         conv_type = "edge_popup"
     else:
         conv_type = "biprop"
 
-    folder_name = (
-        "SLTH_"
-        + "transfered_"
-        + CONFIG_DICT["experiment"]["transfer_type"]
-        + "_"
+    log_dir = os.path.join(
+        CONFIG_DICT["logs"]["log_dir"],
+        "slth",
+        "transfer",
+        "train_["
+        + "_".join(CONFIG_DICT["experiment"]["env_list"])
+        + "]_test_["
         + CONFIG_DICT["experiment"]["env_name"]
-        + "/"
-        + conv_type
-        + "/"
-        + get_str_currentdate()
+        + "]",
+        conv_type,
+        str(CONFIG_DICT["slth"]["remain_rate"]),
+        str(CONFIG_DICT["seed"]),
+        get_str_currentdate(),
     )
-    log_dir = os.path.join(CONFIG_DICT["logs"]["log_dir"], folder_name)
     os.makedirs(log_dir, exist_ok=True)
     shutil_copy("./configs/slth/slth_transfer_single_env_config.py", log_dir)
     main()

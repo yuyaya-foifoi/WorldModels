@@ -32,6 +32,9 @@ from src.slth.utils import modify_module_for_slth
 from src.utils import make_env, preprocess_obs
 from src.utils.date import get_str_currentdate
 from src.utils.save import shutil_copy
+from src.utils.seed import set_seed
+
+set_seed(CONFIG_DICT["seed"])
 
 seed_episodes = CONFIG_DICT["experiment"]["train"]["seed_episodes"]
 
@@ -584,19 +587,20 @@ def main():
 
 
 if __name__ == "__main__":
-    folder_name = os.path.join(
-        "SingleShot_"
-        + "train_["
+    log_dir = os.path.join(
+        CONFIG_DICT["logs"]["log_dir"],
+        "single_shot",
+        "transfer",
+        "train_["
         + "_".join(CONFIG_DICT["experiment"]["env_list"])
         + "]_test_["
         + CONFIG_DICT["experiment"]["env_name"]
-        + "]"
-        + "/"
-        + CONFIG_DICT["single_shot"]["method"]
-        + "/"
-        + get_str_currentdate()
+        + "]",
+        CONFIG_DICT["single_shot"]["method"],
+        str(CONFIG_DICT["single_shot"]["keep_ratio"]),
+        str(CONFIG_DICT["seed"]),
+        get_str_currentdate(),
     )
-    log_dir = os.path.join(CONFIG_DICT["logs"]["log_dir"], folder_name)
     os.makedirs(log_dir, exist_ok=True)
     shutil_copy(
         "./configs/single_shot/single_shot_transfer_single_env_config.py",
